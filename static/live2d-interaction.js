@@ -540,6 +540,36 @@ Live2DManager.prototype.enableMouseTracking = function(model, options = {}) {
         live2dContainer.classList.toggle('locked-hover-fade', shouldFade);
     };
 
+    // 跟踪 Ctrl 键状态（作为备用，主要从事件中直接读取）
+    let isCtrlPressed = false;
+    
+    // 监听 Ctrl 键按下/释放事件（用于在鼠标不在窗口内时也能检测）
+    const onKeyDown = (event) => {
+        // 检查是否是 Ctrl 或 Cmd 键
+        if (event.ctrlKey || event.metaKey || event.key === 'Control' || event.key === 'Meta') {
+            isCtrlPressed = true;
+        }
+    };
+
+    const onKeyUp = (event) => {
+        // 检查是否是 Ctrl 或 Cmd 键
+        if (event.key === 'Control' || event.key === 'Meta') {
+            isCtrlPressed = false;
+            // Ctrl 键释放时，如果正在变淡，立即取消变淡效果
+            if (lockedHoverFadeActive) {
+                setLockedHoverFade(false);
+            }
+        }
+    };
+
+    // 添加全局键盘事件监听
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+
+    // 保存监听器引用以便清理
+    this._ctrlKeyDownListener = onKeyDown;
+    this._ctrlKeyUpListener = onKeyUp;
+
     // 方法1：监听 PIXI 模型的 pointerover/pointerout 事件（适用于 Electron 透明窗口）
     model.on('pointerover', () => {
         showButtons();
@@ -552,6 +582,11 @@ Live2DManager.prototype.enableMouseTracking = function(model, options = {}) {
     
     // 方法2：同时保留 window 的 pointermove 监听（适用于普通浏览器）
     const onPointerMove = (event) => {
+        // 直接从事件中读取 Ctrl 键状态（更可靠）
+        const ctrlKeyPressed = event.ctrlKey || event.metaKey; // 支持 Mac 的 Cmd 键
+        // 同时更新备用状态变量
+        isCtrlPressed = ctrlKeyPressed;
+        
         // 检查模型是否存在，防止切换模型时出现错误
         if (!model) {
             setLockedHoverFade(false);
@@ -598,7 +633,8 @@ Live2DManager.prototype.enableMouseTracking = function(model, options = {}) {
             const dx = Math.max(bounds.left - pointer.x, 0, pointer.x - bounds.right);
             const dy = Math.max(bounds.top - pointer.y, 0, pointer.y - bounds.bottom);
             const distance = Math.sqrt(dx * dx + dy * dy);
-            const shouldFade = this.isLocked && distance < HoverFadethreshold;
+            // 只有在按住 Ctrl 键且鼠标在模型附近时才变淡（不需要锁定状态）
+            const shouldFade = ctrlKeyPressed && distance < HoverFadethreshold;
             setLockedHoverFade(shouldFade);
 
             if (distance < threshold) {
@@ -623,16 +659,35 @@ Live2DManager.prototype.enableMouseTracking = function(model, options = {}) {
         }
     };
 
+    // 窗口失去焦点时重置 Ctrl 键状态和变淡效果
+    const onBlur = () => {
+        isCtrlPressed = false;
+        if (lockedHoverFadeActive) {
+            setLockedHoverFade(false);
+        }
+    };
+
     // 清理旧的监听器
     if (this._mouseTrackingListener) {
         window.removeEventListener('pointermove', this._mouseTrackingListener);
     }
+    if (this._ctrlKeyDownListener) {
+        window.removeEventListener('keydown', this._ctrlKeyDownListener);
+    }
+    if (this._ctrlKeyUpListener) {
+        window.removeEventListener('keyup', this._ctrlKeyUpListener);
+    }
+    if (this._windowBlurListener) {
+        window.removeEventListener('blur', this._windowBlurListener);
+    }
 
     // 保存新的监听器引用
     this._mouseTrackingListener = onPointerMove;
+    this._windowBlurListener = onBlur;
 
-    // 使用 window 监听鼠标移动
+    // 使用 window 监听鼠标移动和窗口失去焦点
     window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('blur', onBlur);
     
     // 监听浮动按钮容器的鼠标进入/离开事件
     // 延迟设置，因为按钮容器可能还没创建
